@@ -103,6 +103,7 @@ var (
 type Server struct {
 	mu          sync.Mutex
 	activeConns map[*serverConn]struct{}
+	shutdown    bool // whether startGracefulShutdown has been called
 
 	// Pool of error channels. This is per-Server rather than global
 	// because channels can't be reused across synctest bubbles.
@@ -115,7 +116,14 @@ func (s *Server) registerConn(sc *serverConn) {
 	}
 	s.mu.Lock()
 	s.activeConns[sc] = struct{}{}
+	shutdown := s.shutdown
 	s.mu.Unlock()
+	if shutdown {
+		// The server began shutting down while this connection was being
+		// set up: it missed the startGracefulShutdown sweep, so shut it
+		// down now.
+		sc.startGracefulShutdown()
+	}
 }
 
 func (s *Server) unregisterConn(sc *serverConn) {
@@ -132,6 +140,7 @@ func (s *Server) startGracefulShutdown() {
 		return // if the Server was used without calling ConfigureServer
 	}
 	s.mu.Lock()
+	s.shutdown = true
 	for sc := range s.activeConns {
 		sc.startGracefulShutdown()
 	}
